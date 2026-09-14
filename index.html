@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#09152c">
+  <meta name="description" content="BKFS loan and collection management">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <title>BKFS Management</title>
+</head>
+<body>
+  <section id="loginView" class="login-view">
+    <div class="login-card">
+      <div class="brand-mark">BK</div>
+      <h1>BKFS</h1>
+      <p class="muted">Credit & Collection Management</p>
+      <form id="loginForm" class="stack">
+        <label>Mobile / Email / Username<input id="loginId" autocomplete="username" required placeholder="Enter login ID"></label>
+        <label>Password<input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Enter password"></label>
+        <button class="primary" type="submit">Login</button>
+        <p id="loginError" class="error"></p>
+      </form>
+      <p class="demo-note">Demo Admin: <b>admin</b> / <b>1234</b></p>
+      <p class="demo-note">Demo only. Use fictional records. Login and data are stored in this browser; secure shared accounts and Android APK are not ready.</p>
+    </div>
+  </section>
+
+  <div id="appView" class="app hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="brand-row"><span class="brand-mark small">BK</span><div><strong>BKFS</strong><small>Management</small></div></div>
+      <nav id="nav"></nav>
+      <button id="logoutBtn" class="nav-item logout">↪ <span>Logout</span></button>
+    </aside>
+    <div id="scrim" class="scrim"></div>
+    <main class="main">
+      <header class="topbar">
+        <button id="menuBtn" class="icon-btn" aria-label="Open menu">☰</button>
+        <div><h2 id="pageTitle">Dashboard</h2><p id="today" class="muted"></p></div>
+        <div class="user-chip"><span id="userInitial">A</span><div><b id="userName">Admin</b><small id="userRole">ADMIN</small></div></div>
+      </header>
+      <p class="demo-note">BKFS prototype — fictional data only. Records stay in this browser.</p>
+      <div id="content" class="content"></div>
+    </main>
+  </div>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="modal-head"><h3 id="modalTitle"></h3><button id="modalClose" class="icon-btn">×</button></div>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>
