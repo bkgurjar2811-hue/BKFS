@@ -10,9 +10,23 @@ android {
         applicationId "com.bkfs.app"
         minSdk 24
         targetSdk 35
-        versionCode 3
-        versionName "1.2"
+        versionCode 4
+        versionName "1.3"
     }
+}
+
+// Bundle the browser management app inside the APK so the app remains usable
+// when Railway/the internet is unavailable. Online mode still opens bkfs-fresh.
+tasks.register('prepareOfflineAssets', Copy) {
+    def repoRoot = rootProject.projectDir.parentFile
+    from(repoRoot) {
+        include 'index.html', 'app.js', 'styles.css', 'icon.svg', 'manifest.webmanifest', 'sw.js'
+    }
+    into layout.projectDirectory.dir('src/main/assets/offline')
+}
+
+tasks.named('preBuild').configure {
+    dependsOn tasks.named('prepareOfflineAssets')
 }
 
 dependencies {
