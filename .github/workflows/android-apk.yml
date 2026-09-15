@@ -1,7 +1,7 @@
 name: Build BKFS APK
 on:
   push:
-    branches: [main]
+    branches: [main, android-apk-build]
   workflow_dispatch:
 permissions:
   contents: read
