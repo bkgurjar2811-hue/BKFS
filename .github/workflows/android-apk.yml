@@ -1,7 +1,7 @@
-name: Build BKFS APK
+name: Build BKFS Final Setup APK
 on:
   push:
-    branches: [main, android-apk-build]
+    branches: [android-apk-build]
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,21 +22,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Build and lint Android APK
-        working-directory: android
-        run: gradle --no-daemon :app:assembleDebug :app:lintDebug
-      - name: Verify APK signature and bundled app
+      - name: Build and lint final setup client
+        run: gradle -p android-live --no-daemon :app:assembleDebug :app:lintDebug
+      - name: Verify APK
         run: |
-          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          APK=android-live/app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$APK"
-          unzip -l "$APK" | grep 'assets/index.html'
-          unzip -l "$APK" | grep 'assets/app.js'
+          "$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$APK"
           mkdir -p output
-          cp "$APK" output/BKFS-demo.apk
-          sha256sum output/BKFS-demo.apk > output/SHA256SUMS.txt
+          cp "$APK" output/BKFS-final-setup-1.2.apk
+          cp android-live/README_BUILD_APK.txt output/README.txt
+          sha256sum output/BKFS-final-setup-1.2.apk > output/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: BKFS-Android-APK
+          name: BKFS-Final-Setup-APK
           path: output/
           if-no-files-found: error
           retention-days: 90

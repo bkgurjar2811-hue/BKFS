@@ -1,0 +1,19 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.bkfs.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.bkfs.app"
+        minSdk 24
+        targetSdk 35
+        versionCode 3
+        versionName "1.2"
+    }
+}
+
+dependencies {
+}
