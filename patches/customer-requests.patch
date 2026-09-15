@@ -1,0 +1,171 @@
+--- a/server.py
++++ b/server.py
+@@ -4,6 +4,9 @@
+ from http.cookies import SimpleCookie
+ from pathlib import Path
+ from cryptography.fernet import Fernet, InvalidToken
++import threading
++from request_intake import accept_request
++STATE_LOCK = threading.RLock()
+ 
+ ROOT=Path(__file__).resolve().parent
+ DATA_DIR=Path(os.environ.get("BKFS_DATA_DIR", str(ROOT/"data")))
+@@ -208,7 +211,10 @@
+             self.send_response(302);self.send_header("Location","/app" if self.session() else "/login");self.end_headers();return
+         if path=="/api/state":
+             if not self.session():self.send_json({"error":"unauthorized"},401);return
+-            self.send_json(load_state());return
++            with STATE_LOCK:
++                state=load_state();state["_revision"]=sha(json.dumps(state,sort_keys=True))
++                self.send_json(state)
++            return
+         if path=="/revoke-device":
+             if not self.session():self.send_error(401);return
+             f=parse_form(self);revoke_device(f.get("token_hash",""));self.send_response(302);self.send_header("Location","/security");self.end_headers();return
+@@ -262,36 +268,34 @@
+             c=self.cookies();x=c.get("bkfs_session")
+             if x:SESSIONS.pop(x.value,None)
+             self.send_response(302);self.send_header("Location","/login");self.send_header("Set-Cookie","bkfs_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict");self.end_headers();return
+-        if path=="/loan-request":self.send_file("loan_request.html","text/html; charset=utf-8");return
++        if path in ("/loan-request","/loan_request.html"):self.send_file("loan_request.html","text/html; charset=utf-8");return
+         if path=="/customer-pay":self.send_file("customer_pay.html","text/html; charset=utf-8");return
+         pub={"/manifest.webmanifest":("manifest.webmanifest","application/manifest+json"),"/icon-192.png":("icon-192.png","image/png"),
+         "/icon-512.png":("icon-512.png","image/png"),"/payment_qr.png":("payment_qr.png","image/png"),"/loan_request_qr.png":("loan_request_qr.png","image/png")}
+         if path in pub:self.send_file(*pub[path]);return
+         self.send_error(404)
+     def do_POST(self):
++        with STATE_LOCK:
++            self.handle_post()
++    def handle_post(self):
+         maybe_daily_backup()
+         path=urllib.parse.urlparse(self.path).path
+         if path=="/api/state":
+             if not self.session():self.send_json({"error":"unauthorized"},401);return
+-            try:s=read_json(self);save_state(s);self.send_json({"ok":True})
++            try:
++                s=read_json(self);revision=s.pop("_revision",None)
++                if revision != sha(json.dumps(load_state(),sort_keys=True)):
++                    self.send_json({"error":"New records arrived. Refresh and retry; nothing was overwritten."},409);return
++                save_state(s);self.send_json({"ok":True})
+             except Exception as e:self.send_json({"error":"invalid data"},400)
+             return
+         if path=="/api/public/loan-request":
+             try:
+                 b=read_json(self);st=load_state()
+-                m=''.join(filter(str.isdigit,b.get("mobile","")));a=''.join(filter(str.isdigit,b.get("aadhaarLast4","")))
+-                cust=None
+-                for c in st.get("customers",[]):
+-                    cm=''.join(filter(str.isdigit,c.get("mobile","")));ad=''.join(filter(str.isdigit,c.get("aadhaar","")))
+-                    if cm and (cm==m or cm.endswith(m) or m.endswith(cm)) and (not ad or (a and ad.endswith(a))):cust=c;break
+-                if not cust:self.send_json({"error":"Registered customer verify nahi hua"},403);return
+-                amt=float(b.get("amount") or 0)
+-                if amt<=0:self.send_json({"error":"Invalid amount"},400);return
+-                st.setdefault("loanRequests",[]).append({"id":"LR"+str(int(time.time()*1000)),"customerId":cust["id"],"name":b.get("name") or cust.get("name"),
+-                "amount":amt,"tenure":int(b.get("tenure") or 1),"frequency":b.get("frequency","Monthly"),"purpose":b.get("purpose",""),
+-                "status":"Pending","date":time.strftime("%Y-%m-%d"),"note":b.get("note",""),"source":"External Customer Form"})
+-                save_state(st);self.send_json({"ok":True})
+-            except Exception:self.send_json({"error":"Invalid request"},400)
++                result=accept_request(st,b)
++                save_state(st);self.send_json(result)
++            except ValueError as e:self.send_json({"error":str(e)},400)
++            except Exception:self.send_json({"error":"Request save nahi hua. Dobara try karein."},500)
+             return
+         if path=="/api/public/customer-verify":
+             try:
+--- a/index.html
++++ b/index.html
+@@ -168,16 +168,22 @@
+ s.earnInterest=$('e1').checked;s.earnPenalty=$('e2').checked;s.earnFile=$('e3').checked;
+ save(d);hide();render();alert('Admin settings saved')}
+ 
++function requestEscape(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
++function linkRequestCustomer(id){
++  if(!admin())return;const d=get(),r=d.loanRequests.find(x=>x.id===id);if(!r)return;
++  show(`<h2>Verify request customer</h2><p>${requestEscape(r.name)} · ${requestEscape(r.mobile)} · Aadhaar last 4: ${requestEscape(r.aadhaarLast4)}</p><p>Details verify karke existing customer select karein. Naya customer ho to pehle Add Customer use karein.</p><select id="requestCustomer"><option value="">Select customer</option>${d.customers.map(c=>`<option value="${requestEscape(c.id)}">${requestEscape(c.name)} · ${requestEscape(c.mobile)}</option>`).join('')}</select><button id="linkRequest">Link verified customer</button>`);
++  $('linkRequest').onclick=()=>{const cid=$('requestCustomer').value;if(!cid)return;const latest=get(),req=latest.loanRequests.find(x=>x.id===id);if(!req||req.status!=='Pending')return;req.customerId=cid;req.verification='Admin verified';save(latest);openLoanRequests()}
++}
+ function openLoanRequests(){
+   if(!admin())return;
+   let d=(typeof data==='function'?data():get()),rs=(d.loanRequests||[]).slice().reverse();
+   show(`<h2>Loan Request Inbox</h2>
+     <div class=notice>External customer form se aaye loan requests ko approve, reject ya review kar sakte hain.</div>
+     <div style="margin-top:12px">${rs.map(r=>{let c=d.customers.find(x=>x.id===r.customerId);return `<div class=reqCard>
+-      <div class=reqTop><div><div class=name>${c?c.name:'Customer'}</div><div class=sub>${r.date} · ${r.frequency} · ${r.tenure} EMI · ${r.source||'Customer'}</div></div><span class=reqStatus>${r.status}</span></div>
++      <div class=reqTop><div><div class=name>${requestEscape(c?c.name:r.name||'Customer')}</div><div class=sub>${r.date} · ${r.frequency} · ${r.tenure} EMI · ${r.source||'Customer'}</div></div><span class=reqStatus>${r.status}</span></div>
+       <div style="font-size:22px;font-weight:900;margin-top:8px">${money(r.amount)}</div>
+-      <div class=sub>${r.purpose||'No purpose'}${r.note?' · '+r.note:''}</div>
+-      <div class=reqActions>
++      <div class=sub>${requestEscape(r.purpose||'No purpose')}${r.note?' · '+requestEscape(r.note):''}</div>
++      <div class=sub>${requestEscape(r.mobile||'')} · ${requestEscape(r.verification||'Matched')}</div><div class=reqActions>
+         ${r.status==='Pending'?`<button class=success onclick="approveLoanRequest('${r.id}')">Approve</button><button class=danger onclick="rejectLoanRequest('${r.id}')">Reject</button>`:''}
+         <button class=soft onclick="loanRequestCustomer('${r.customerId}')">Customer</button>
+       </div>
+@@ -188,6 +194,7 @@
+ }
+ function approveLoanRequest(id){
+   let d=(typeof data==='function'?data():get()),r=(d.loanRequests||[]).find(x=>x.id===id);if(!r)return;
++  if(!d.customers.some(c=>c.id===r.customerId)){alert('Customer verification required. Customer record add/correct karke request link karein.');linkRequestCustomer(id);return}
+   r.status='Approved';save(d);
+   if(typeof openLoan==='function'){
+     openLoan();
+@@ -208,7 +215,7 @@
+ 
+ 
+ function openCustomerRequestLink(){
+-  window.open('loan_request.html','_blank');
++  window.open('/loan-request','_blank');
+ }
+ 
+ 
+@@ -226,7 +233,7 @@
+         <span class=reqStatus>${p.status}</span></div>
+         <div style="font-size:22px;font-weight:900;margin-top:8px">${money(p.amount)}</div>
+         <div class=sub>${p.note||'UPI payment claim'}</div>
+-        ${p.status==='Pending'?`<div class=reqActions><button class=success onclick="verifyPaymentClaim('${p.id}')">Verify & Credit</button><button class=danger onclick="rejectPaymentClaim('${p.id}')">Reject</button></div>`:''}
++        ${p.status==='Pending'?`<div class=sub>${requestEscape(r.mobile||'')} · ${requestEscape(r.verification||'Matched')}</div><div class=reqActions><button class=success onclick="verifyPaymentClaim('${p.id}')">Verify & Credit</button><button class=danger onclick="rejectPaymentClaim('${p.id}')">Reject</button></div>`:''}
+       </div>`
+     }).join('')||'<div class=notice>No UPI payment claim yet</div>'}</div>`)
+ }
+--- a/loan_request.html
++++ b/loan_request.html
+@@ -27,7 +27,7 @@
+     <div class="notice">Yeh form customer ke liye hai. BKFS Admin/Staff login ki zarurat nahi hai.</div>
+     <div class="field"><label>Full Name</label><input id="name"></div>
+     <div class="two">
+-      <div class="field"><label>Registered Mobile</label><input id="mobile" inputmode="numeric"></div>
++      <div class="field"><label>Mobile Number</label><input id="mobile" inputmode="numeric"></div>
+       <div class="field"><label>Aadhaar Last 4</label><input id="aadhaar" maxlength="4" inputmode="numeric"></div>
+     </div>
+     <div class="two">
+@@ -54,8 +54,14 @@
+ </div>
+ <script>
+ const $=x=>document.getElementById(x);
++let submitting=false;
++let requestId=sessionStorage.getItem('bkfs_request_id')||crypto.randomUUID();
++sessionStorage.setItem('bkfs_request_id',requestId);
+ async function submitReq(){
++  if(submitting)return;
++
+   const body={
++    requestId,
+     name:$('name').value.trim(),
+     mobile:($('mobile').value||'').replace(/\D/g,''),
+     aadhaarLast4:($('aadhaar').value||'').replace(/\D/g,''),
+@@ -66,11 +72,16 @@
+     note:$('note').value
+   };
+   if(!body.mobile||!body.aadhaarLast4||!body.amount){alert('Mobile, Aadhaar last 4 aur amount required.');return}
++  submitting=true;
++  try {
+   const r=await fetch('/api/public/loan-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+   const j=await r.json().catch(()=>({}));
+   if(!r.ok){alert(j.error||'Request submit nahi hua');return}
+   $('success').style.display='block';
++  $('success').textContent='Request admin ko bhej di gayi hai. Receipt: '+j.receipt;
++  requestId=crypto.randomUUID();sessionStorage.setItem('bkfs_request_id',requestId);
+   ['name','mobile','aadhaar','amount','purpose','note'].forEach(id=>$(id).value='');
++  } catch(e){alert('Connection failed. Details rakhi gayi hain; dobara Submit karein.')} finally{submitting=false}
+ }
+ const link=location.href;
+ $('linkText').textContent=link;
