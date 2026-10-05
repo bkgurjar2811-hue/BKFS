@@ -3,6 +3,7 @@ package com.bkfs.app;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -16,13 +17,15 @@ import android.widget.*;
 public class MainActivity extends Activity {
     private static final String HOST = "bkfs-fresh-production.up.railway.app";
     private static final String BKFS_URL = "https://" + HOST + "/login";
-    private static final String OFFLINE_URL = "file:///android_asset/offline/index.html";
+    private static final String EMBEDDED_FALLBACK = "file:///android_asset/offline/index.html";
     private WebView web;
     private ProgressBar progress;
     private View errorPanel;
     private ValueCallback<Uri[]> fileCallback;
+    private SharedPreferences prefs;
     private boolean failed;
-    private boolean offlineMode;
+    private boolean cacheRetry;
+    private boolean embeddedFallback;
 
     private boolean hasInternet() {
         try {
@@ -50,38 +53,56 @@ public class MainActivity extends Activity {
         catch (android.content.ActivityNotFoundException e) { Toast.makeText(this,"Is action ke liye app nahi mila",Toast.LENGTH_LONG).show(); }
     }
 
-    private void loadOffline() {
-        if(offlineMode)return;
-        offlineMode=true;
-        failed=false;
-        errorPanel.setVisibility(View.GONE);
-        progress.setVisibility(View.VISIBLE);
+    private WebResourceResponse bundledScript(String asset,String mime) {
+        try { return new WebResourceResponse(mime,"UTF-8",getAssets().open(asset)); }
+        catch(Exception e) { return null; }
+    }
+
+    private void loadEmbeddedFallback() {
+        if(embeddedFallback)return;
+        embeddedFallback=true;failed=false;
+        errorPanel.setVisibility(View.GONE);progress.setVisibility(View.VISIBLE);
         web.getSettings().setAllowFileAccess(true);
-        web.loadUrl(OFFLINE_URL);
-        Toast.makeText(this,"BKFS Offline Mode",Toast.LENGTH_SHORT).show();
+        web.loadUrl(EMBEDDED_FALLBACK);
+        Toast.makeText(this,"First online login required for full offline sync",Toast.LENGTH_LONG).show();
+    }
+
+    private void loadCachedLive() {
+        embeddedFallback=false;cacheRetry=true;
+        web.getSettings().setAllowFileAccess(false);
+        web.getSettings().setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
+        web.loadUrl(prefs.getString("last_app_url","https://"+HOST+"/app"));
+        Toast.makeText(this,"BKFS Offline · saved live screen",Toast.LENGTH_SHORT).show();
     }
 
     private void loadBest() {
+        failed=false;errorPanel.setVisibility(View.GONE);
         if(hasInternet()) {
-            offlineMode=false;
+            embeddedFallback=false;cacheRetry=false;
             web.getSettings().setAllowFileAccess(false);
+            web.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
             web.loadUrl(BKFS_URL);
-        } else {
-            loadOffline();
-        }
+        } else loadCachedLive();
+    }
+
+    private void recoverMainFrame() {
+        if(embeddedFallback){showError();return;}
+        if(!cacheRetry){loadCachedLive();return;}
+        loadEmbeddedFallback();
     }
 
     private void showError() { failed=true;progress.setVisibility(View.GONE);errorPanel.setVisibility(View.VISIBLE); }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);setContentView(R.layout.activity_main);
+        prefs=getSharedPreferences("bkfs",MODE_PRIVATE);
         View container=findViewById(R.id.root);
         container.setOnApplyWindowInsetsListener((v,insets)->{
             v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom());
             return insets.consumeSystemWindowInsets();
         });container.requestApplyInsets();
         web=findViewById(R.id.web);progress=findViewById(R.id.progress);errorPanel=findViewById(R.id.errorPanel);
-        WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);
+        WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);
         s.setAllowFileAccess(false);s.setAllowContentAccess(true);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(false);
         CookieManager.getInstance().setAcceptCookie(true);CookieManager.getInstance().setAcceptThirdPartyCookies(web,false);
@@ -90,18 +111,22 @@ public class MainActivity extends Activity {
                 if(internal(request.getUrl()))return false;
                 if(request.isForMainFrame())external(request.getUrl());return true;
             }
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view,WebResourceRequest request){
+                Uri uri=request.getUrl();
+                if(uri!=null && HOST.equalsIgnoreCase(uri.getHost())){
+                    if("/offline.js".equals(uri.getPath()))return bundledScript("sync/offline.js","application/javascript");
+                    if("/service-worker.js".equals(uri.getPath()))return bundledScript("sync/service-worker.js","application/javascript");
+                }
+                return super.shouldInterceptRequest(view,request);
+            }
             @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){failed=false;errorPanel.setVisibility(View.GONE);progress.setVisibility(View.VISIBLE);}
-            @Override public void onPageFinished(WebView view,String url){progress.setVisibility(View.GONE);if(!failed)errorPanel.setVisibility(View.GONE);CookieManager.getInstance().flush();}
-            @Override public void onReceivedError(WebView view,WebResourceRequest req,WebResourceError error){
-                if(req.isForMainFrame()) {
-                    if(!offlineMode)loadOffline(); else showError();
-                }
+            @Override public void onPageFinished(WebView view,String url){
+                progress.setVisibility(View.GONE);if(!failed)errorPanel.setVisibility(View.GONE);CookieManager.getInstance().flush();
+                if(url!=null && url.startsWith("https://"+HOST+"/app"))prefs.edit().putString("last_app_url",url).apply();
+                if(url!=null && url.startsWith("https://"+HOST))view.evaluateJavascript("if('serviceWorker'in navigator)navigator.serviceWorker.register('/service-worker.js').catch(()=>{});",null);
             }
-            @Override public void onReceivedHttpError(WebView view,WebResourceRequest req,WebResourceResponse response){
-                if(req.isForMainFrame()) {
-                    if(!offlineMode)loadOffline(); else showError();
-                }
-            }
+            @Override public void onReceivedError(WebView view,WebResourceRequest req,WebResourceError error){if(req.isForMainFrame())recoverMainFrame();}
+            @Override public void onReceivedHttpError(WebView view,WebResourceRequest req,WebResourceResponse response){if(req.isForMainFrame()&&response.getStatusCode()>=500)recoverMainFrame();}
         });
         web.setWebChromeClient(new WebChromeClient(){
             @Override public boolean onCreateWindow(WebView view,boolean dialog,boolean userGesture,Message message){
@@ -119,7 +144,7 @@ public class MainActivity extends Activity {
                 try{startActivityForResult(params.createIntent(),11);}catch(android.content.ActivityNotFoundException e){fileCallback.onReceiveValue(null);fileCallback=null;}return true;
             }
         });
-        findViewById(R.id.retryButton).setOnClickListener(v->{errorPanel.setVisibility(View.GONE);loadBest();});
+        findViewById(R.id.retryButton).setOnClickListener(v->loadBest());
         loadBest();
     }
 

@@ -10,13 +10,13 @@ android {
         applicationId "com.bkfs.app"
         minSdk 24
         targetSdk 35
-        versionCode 6
-        versionName "1.4"
+        versionCode 7
+        versionName "1.5-sync"
     }
 }
 
-// Bundle the browser management app inside the APK so the app remains usable
-// when Railway/the internet is unavailable. Online mode still opens bkfs-fresh.
+// Keep the old bundled screen only as a first-install fallback. Once the owner
+// opens /app online, the exact live UI and state are cached for offline use.
 tasks.register('prepareOfflineAssets', Copy) {
     def repoRoot = rootProject.projectDir.parentFile
     from(repoRoot) {

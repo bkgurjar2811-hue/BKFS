@@ -1,14 +1,10 @@
-BKFS 1.2 — final hosted setup client
+BKFS 1.5 Sync — hosted management client
 
-Source: BKFS_ANDROID_BUILD_READY_V1.zip, recovered from the earlier Android project.
-Loads https://bkfs-fresh-production.up.railway.app/login and the existing server UI.
-Package com.bkfs.app. No credentials or business records are embedded.
-The separate in.bkfs.demo app is not upgraded or migrated.
-This client requires internet. Offline data entry and sync are NOT implemented.
-Customer layout is served by the existing final Railway deployment, not copied from the unrelated browser demo.
-System insets, HTTPS navigation, main-page errors, retry, user-selected file inputs, and Call/WhatsApp navigation are handled by the Android wrapper.
+Package: com.bkfs.app
+Host: https://bkfs-fresh-production.up.railway.app
 
-Build: Gradle 8.9, JDK 17, Android SDK 35.
-gradle -p android-live :app:assembleDebug :app:lintDebug
+This APK embeds the tested v2 offline state engine and service worker. After one authenticated online load of /app, it keeps the exact live Railway UI and device state available offline. Offline customer, loan and collection edits remain pending and retry on reconnect. Independent server/device changes are merged; same-field conflicts retain both values in syncConflicts for audit. Pending edits block logout.
 
-Validation limits: APK compilation/lint/signature are checked in CI. Authenticated server flows and on-device behavior require testing with the existing account. Do not assume offline sync. Debug signing is not production signing.
+First online login is required. Customer public requests submitted while their page is offline are delivered when that page reconnects. Server /api/state must support ETag and If-Match/409 for safe bidirectional sync.
+
+Build validation: Gradle compile, Android lint, APK signature verification, package/version dump, JavaScript offline/reconnect tests.
